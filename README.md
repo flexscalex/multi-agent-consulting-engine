@@ -1,80 +1,54 @@
 # Multi-Agent Consulting Engine
 
-A multi-agent orchestration that runs a full competitive consulting engagement on a brief
-you provide. Three "firms" (modeled on McKinsey, BCG, and Bain methodologies) each spin up
-a swarm of analysts and an engagement manager, compete on your strategy question, get
-graded by a review panel, revise based on the feedback, and then a partner agent writes a
-single best-of-all-three final report.
+A multi-agent workflow that takes over a project the way a second consulting team would: inherit the data the first team collected, set their opinions aside, verify what matters, find what is missing, and let the facts pick the route. It runs on a project folder (docs, data pulls, scripts, notes) and writes a decision memo a client could act on, with every claim traceable to a fact and every number tagged measured, derived, or assumed.
 
-It is a portfolio piece showing how to coordinate roughly 26 agents across four stages with
-structured outputs, parallel fan-out, and a feedback loop. Drop in your own `brief.md` and
-it works on any strategy question.
+This is v2. The v1 engine (three consulting-firm personas competing across two rounds) lives on the `main` branch and under `legacy/`. V2 replaces the personas with lenses that actually disagree, adds a verification stage, gives every run a way to say "do not proceed" or "insufficient evidence", and cuts the research spend by doing research once instead of once per agent.
 
-## What it does
+## What comes out
 
-You give it a brief (a strategy question, the constraints, and what a good answer looks
-like). It returns a partner-grade final report that ranks three competing approaches and
-synthesizes the strongest recommendation, including a concrete pilot with unit economics
-and a 12 to 24 month plan.
+- **A decision memo.** One page. Verdict, recommendation, three reasons, three risks, what would flip it, the next five things to validate and who to call.
+- **A full report.** Options and criteria before the recommendation, where the lenses disagreed, what the red team broke and what survived, a 90-day validation roadmap, confidence by section, and an appendix of every fact ID used.
+- **A claims ledger.** One CSV row per claim with its source and verification status. Reusable across runs.
+- **An assumptions register** and a **ranked primary-research list**: the calls, records requests, and data pulls that would raise confidence, each with the answer that would change the verdict.
 
-## How the four stages work
+## How it works
 
-1. **Firm Round 1 (compete).** Each of the three firms runs in parallel. Inside each firm,
-   four analyst agents work four workstreams at once: Market and Evidence, Strategy and
-   Solution Architecture, Business Case and Pilot Design, and Risk, Governance and
-   Feasibility. Each analyst does its own web research. An engagement manager then
-   synthesizes the four workstreams into that firm's full proposal and writes it to disk.
+Two workflows, with a human gate between them. See `RUNBOOK.md` for the exact commands.
 
-2. **Competitive Review (review).** A review-panel agent reads all three proposals, ranks
-   the firms with rationale, and for each firm lists its strengths, the gaps relative to
-   what competitors found, and pointed follow-up challenges to force a deeper Round 2.
+**Stage 1, fact base** (`workflow-factbase.js`)
 
-3. **Firm Round 2 (revise).** Each firm gets its own feedback plus a summary of what the
-   competitors discovered. It spins up fresh gap-research agents to chase the panel's
-   toughest follow-ups, then the engagement manager rewrites a stronger proposal.
+1. Inventory the project folder and split the prose into read packets.
+2. One reader per packet extracts every claim and labels it: fact, derived, assumption, opinion, gotcha, open item, or source.
+3. A merge step dedupes, assigns IDs, and writes `FACT_BASE.md`, `SOURCES.md`, `QUARANTINE.md` (the prior team's opinions, explicitly not an input), and a claims ledger.
+4. Verification: fact checkers fetch the cited URL (or its Wayback copy) for the load-bearing claims and mark each verified, unverified, contradicted, or unreachable. A numbers auditor recomputes derived figures from the project's own inputs.
+5. A completeness analyst ranks the data gaps against the brief's definition of "complete" and writes the questions only the client can answer. Gap fillers try to pull what the web can supply.
 
-4. **Final Report (synthesize).** A senior-partner agent reads both rounds and the review,
-   then writes the definitive client report: the single recommended direction, a
-   side-by-side comparison table, the synthesized best-of-all-three recommendation with a
-   concrete pilot, the hardest unsolved problems, honest confidence levels, and an
-   appendix of sources.
+You then read the one-page summary, answer the client questions, and decide whether to continue.
 
-## The agent breakdown (about 26 agents)
+**Stage 2, decide** (`workflow-decide.js`)
 
-- **Round 1:** 3 firms x (4 analysts + 1 engagement manager) = 15 agents
-- **Review:** 1 review-panel agent
-- **Round 2:** per firm, up to 2 gap-research agents + 1 reviser. 3 firms x up to 3 = up to 9 agents
-- **Final:** 1 partner agent
-
-That lands around 26 agents on a full run, most of them executing in parallel.
+1. Independent lenses (operator, underwriter, pre-mortem; plus buyer, counsel, incumbent on full runs) each read the fact base and return options, a verdict, reasons with fact IDs, risks, what would change their mind, and the primary research they would commission. They do not research; a missing fact is a finding.
+2. A traceability auditor flags any lens claim without a fact ID or that quietly re-adopts a quarantined opinion. In parallel, a red team that has not seen the lens memos, only their bare conclusions, attacks them from the fact base.
+3. Material challenges that a source could settle get researched. Everything else stays open and visible.
+4. On full runs, each lens answers the red team and may change its verdict.
+5. A partner writes the deliverables against `rubric.md`. A QC editor checks every rule and sends it back once if it fails.
 
 ## Design notes
 
-- **Structured outputs.** Every stage except the final narrative returns against a JSON
-  schema (workstream findings, firm deliverable, and review), so downstream agents get
-  clean structured input instead of loose prose.
-- **Distinct firm voices.** Each firm carries its own signature methodology in its prompts,
-  so the three proposals genuinely diverge in framing rather than converging on the same
-  answer.
-- **Evidence discipline.** The shared ground rules push every agent to cite current
-  sources, separate fact from inference, flag confidence, and admit when data does not
-  exist rather than inventing it.
-- **Feedback loop.** Round 2 is not just a rewrite. Firms see competitor insights and the
-  panel's specific challenges, which forces real differentiation.
+- **Research once, read many.** Lenses reason from one shared fact base rather than each doing their own web research. Facts are established once; disagreement lives in interpretation.
+- **Quarantine, not deletion.** The prior team's opinions are kept in one file with "reinstate only if" conditions, so a conclusion can be re-earned with evidence but never inherited.
+- **Blind red team.** It sees only the conclusions, not the reasoning or how many lenses agreed, so it cannot soften into agreement.
+- **Verification is a separate stage.** Citation checking is never folded into the writer.
+- **A way to say no.** Verdicts are proceed, proceed with conditions, do not proceed, or insufficient evidence. "Do nothing" and "do less" are always among the options.
+- **Tiered models.** Reading, fetching, and pulling run on the cheaper tier; merging, deciding, red-teaming, and writing run on the stronger tier. Both are constants at the top of each script.
+- **No silent caps.** Every place the run bounds its own coverage (fact checks, gap fills, research) logs what was skipped.
 
-## How to adapt it
+## Adapting it
 
-1. Open `brief.md` and replace the example with your own engagement. Keep it tight: the
-   situation, the decision to be made, the constraints, and what a strong answer looks
-   like. The whole swarm reads this file as its source of truth.
-2. Optionally tune `WORKSTREAMS` in `workflow.js` if your problem needs different lenses,
-   or adjust the `FIRMS` methodologies.
-3. Run it in your agent harness. The workflow expects `agent()`, `parallel()`, and `log()`
-   helpers plus web research tools (the same primitives most multi-agent runners expose).
-   Outputs land under `./output/`.
-
-The example `brief.md` is a generic specialty-coffee market-entry question, included only
-to show the format. Swap it for anything.
+- Copy `brief.template.md` into your project and fill it in. Keep private briefs in private repos.
+- Edit `LENSES` in `workflow-decide.js` to change who sits at the table. Keep each lens's question to one sentence.
+- Edit `rubric.md` to change what QC enforces.
+- The scripts expect the Claude Code Workflow runtime: `agent()`, `parallel()`, `pipeline()`, `log()`, `phase()`, and `args`. Agents need file read/write, shell, web fetch, and web search.
 
 ## License
 
